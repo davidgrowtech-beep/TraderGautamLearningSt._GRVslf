@@ -144,7 +144,18 @@ fbq('track', 'PageView');
 
     const TELEGRAM_URL = "https://t.me/+1TwKHI5vMVAyMjE1";
     const SESSION_KEY = "gt_lead_fired";
+    const REDIRECT_DELAY = 120;       // ms — standard beacon-flush delay
+    const MIN_DWELL_MS = 600;         // minimum time-on-page to trust a click with no motion signal
     const pageLoadTime = Date.now();
+
+    let hasEngaged = false;   // true once a real scroll/move/touch/key happens
+    let isNavigating = false; // guards against double-click / double-fire
+
+    function markEngaged() { hasEngaged = true; }
+    window.addEventListener('scroll', markEngaged, { passive: true, once: true });
+    window.addEventListener('mousemove', markEngaged, { passive: true, once: true });
+    window.addEventListener('touchstart', markEngaged, { passive: true, once: true });
+    window.addEventListener('keydown', markEngaged, { passive: true, once: true });
 
     // --- Bot / fake-click detection ---
     function isLikelyBot() {
@@ -154,43 +165,54 @@ fbq('track', 'PageView');
       return false;
     }
 
-    // --- Core tracking + redirect function ---
-    function trackAndRedirect(event) {
-      if (event) event.preventDefault();
+    function dwellMs() {
+      return Date.now() - pageLoadTime;
+    }
 
-      // Bot detected -> let them through to Telegram but DO NOT count as a Lead
-      if (isLikelyBot()) {
-        window.location.href = TELEGRAM_URL;
-        return;
-      }
+    // Fires the Lead optimization signal ONLY for a genuine, engaged, human click.
+    // Anything else (auto-redirect, bots, zero-engagement instant clicks) is
+    // logged as LowQualityClick instead, so Meta never learns from junk traffic.
+    function fireQualitySignal(isRealManualClick) {
+      if (typeof fbq === 'undefined') return;
 
-      // Reject synthetic/programmatic click events (not real user gestures)
-      if (event && event.isTrusted === false) {
-        window.location.href = TELEGRAM_URL;
-        return;
-      }
+      const qualifies =
+        isRealManualClick &&
+        !isLikelyBot() &&
+        (hasEngaged || dwellMs() >= MIN_DWELL_MS);
 
-      // Dedup: fire Lead only once per session (covers both manual click & auto-redirect)
-      if (!sessionStorage.getItem(SESSION_KEY)) {
-        if (typeof fbq !== 'undefined') {
+      if (qualifies) {
+        if (!sessionStorage.getItem(SESSION_KEY)) {
           fbq('track', 'Lead', {
             value: '0.00',
             currency: 'INR',
             predicted_ltv: '0.00',
           });
-        } else {
-          console.log('Pixel not loaded, but redirecting...');
+          sessionStorage.setItem(SESSION_KEY, '1');
         }
-        sessionStorage.setItem(SESSION_KEY, '1');
+      } else {
+        fbq('trackCustom', 'LowQualityClick');
       }
+    }
 
-      // Race-condition fix: let the beacon fire before navigating away
+    // --- Core click handler (ONLY called from the real button click) ---
+    function trackAndRedirect(event) {
+      if (event) event.preventDefault();
+      if (isNavigating) return; // prevent duplicate fires on double-click
+      isNavigating = true;
+
+      const isRealClick = !!(event && event.isTrusted !== false);
+      fireQualitySignal(isRealClick);
+
+      // Let the beacon fire before navigating away
       setTimeout(function () {
         window.location.href = TELEGRAM_URL;
-      }, 300);
+      }, REDIRECT_DELAY);
     }
 
     // --- Auto-redirect countdown (fallback for users who don't click) ---
+    // IMPORTANT: this path NEVER fires Lead/Subscribe — only genuine manual
+    // clicks should ever trigger the optimization signal. Passive visitors
+    // who simply left the tab open are not leads.
     let time = 8;
     const timerTextTpl = "Will be redirecting in {n} seconds....";
     const countTxt = document.getElementById('countTxt');
@@ -209,22 +231,35 @@ fbq('track', 'PageView');
       paintTimer();
       if (time <= 0) {
         clearInterval(countdown);
-        // Dwell-time + visibility gate: only count auto-redirect if tab was
-        // actually visible/foreground for the full duration and isn't a bot.
-        if (document.visibilityState === 'visible' && !isLikelyBot()) {
-          trackAndRedirect();
-        } else {
-          window.location.href = TELEGRAM_URL;
+        if (typeof fbq !== 'undefined') {
+          fbq('trackCustom', 'LowQualityClick', { source: 'auto_redirect' });
         }
+        window.location.href = TELEGRAM_URL;
       }
     }, 1000);
 
-    // If user navigates away before the timer completes, stop it (avoid
-    // firing Lead on tab-close / background bot crawlers)
+    // Stop the timer if the tab goes to the background (avoid redirecting
+    // bots/background crawlers or firing anything while hidden)
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         clearInterval(countdown);
       }
+    });
+
+    // Visible fallback: some in-app browsers (Instagram/FB WebView) swallow
+    // the click handler occasionally. Show a plain, direct href fallback
+    // after 1.3s so users are never stuck.
+    window.addEventListener('DOMContentLoaded', function () {
+      setTimeout(function () {
+        const btn = document.getElementById('telegramBtn');
+        if (!btn || document.getElementById('fallbackLink')) return;
+        const fallback = document.createElement('a');
+        fallback.id = 'fallbackLink';
+        fallback.href = TELEGRAM_URL;
+        fallback.textContent = 'Not redirected? Tap here to join';
+        fallback.style.cssText = 'display:block;text-align:center;margin-top:8px;font-size:11px;color:#60a5fa;text-decoration:underline;';
+        btn.parentNode.insertBefore(fallback, btn.nextSibling);
+      }, 1300);
     });
     </script>
 
