@@ -639,7 +639,7 @@ src="https://www.facebook.com/tr?id=2269547673864241&ev=PageView&noscript=1"
      CONFIG — edit these two lines only
      ============================================================ */
   var TELEGRAM_URL = "https://t.me/+1TwKHI5vMVAyMjE1";
-  var REDIRECT_DELAY_MS = 350; // small delay so the pixel event has time to fire
+  var REDIRECT_DELAY_MS = 600; // delay so the pixel event has time to actually reach Meta before we navigate away, even on slower mobile data
 
   /* ---------- Wire every Telegram button to the same link ---------- */
   var allBtns = document.querySelectorAll('#telegramBtnHero, #telegramBtnFinal, #telegramBtnSticky, #navCta');
@@ -708,8 +708,8 @@ src="https://www.facebook.com/tr?id=2269547673864241&ev=PageView&noscript=1"
      - isTrusted check: ignores synthetic/bot-dispatched clicks
      - fires from the actual click handler, then redirects
      ============================================================ */
-  var FIRED_KEY = 'lwg_Lead_fired_v1';
-  var MIN_DWELL_MS = 1200; // ignore clicks that fire before a real visitor could have read the page
+  var FIRED_KEY = 'lwg_Lead_fired_v2';
+  var MIN_DWELL_MS = 2200; // ignore clicks that fire before a real visitor could have read the page
   var pageLoadTime = Date.now();
 
   function hasFiredThisSession(){
@@ -721,9 +721,16 @@ src="https://www.facebook.com/tr?id=2269547673864241&ev=PageView&noscript=1"
   }
 
   // ---------- Human-interaction signal (bot click-farms rarely simulate this) ----------
+  // NOTE: 'touchstart' was deliberately removed from this list. On mobile the tap
+  // that presses the CTA button itself fires a touchstart a few ms before the
+  // click event, so a click-farm doing "open page, wait, tap button" satisfied
+  // this check using the very same gesture that triggers the conversion — it
+  // added zero real filtering. Now this only counts as "human" if the visitor
+  // did something on the page OTHER than the CTA tap (scroll, swipe-move, key,
+  // wheel) — something a scripted/farmed session is much less likely to do.
   var hadHumanInteraction = false;
   function markHuman(){ hadHumanInteraction = true; }
-  ['pointermove', 'touchstart', 'scroll', 'keydown', 'wheel'].forEach(function(evt){
+  ['pointermove', 'touchmove', 'scroll', 'keydown', 'wheel'].forEach(function(evt){
     window.addEventListener(evt, markHuman, { passive: true, once: true });
   });
 
